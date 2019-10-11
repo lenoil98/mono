@@ -21,7 +21,6 @@
 void
 mono_arm_gsharedvt_init (void)
 {
-	mono_aot_register_jit_icall ("mono_arm_start_gsharedvt_call", mono_arm_start_gsharedvt_call);
 }
 
 gboolean
@@ -34,7 +33,7 @@ mono_arch_gsharedvt_sig_supported (MonoMethodSignature *sig)
 	return TRUE;
 }
 
-static inline void
+static void
 add_to_map (GPtrArray *map, int src, int dst)
 {
 	g_ptr_array_add (map, GUINT_TO_POINTER (src));
@@ -48,19 +47,19 @@ add_to_map (GPtrArray *map, int src, int dst)
  * 17..  - stack slots
  */
 
-static inline int
+static int
 map_reg (int reg)
 {
 	return reg;
 }
 
-static inline int
+static int
 map_freg (int reg)
 {
 	return reg + NUM_GSHAREDVT_ARG_GREGS;
 }
 
-static inline int
+static int
 map_stack_slot (int slot)
 {
 	return slot + NUM_GSHAREDVT_ARG_GREGS + NUM_GSHAREDVT_ARG_FREGS;

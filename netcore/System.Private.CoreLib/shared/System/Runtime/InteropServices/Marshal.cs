@@ -8,7 +8,9 @@ using System.Runtime.CompilerServices;
 using System.Text;
 
 using Internal.Runtime.CompilerServices;
+using System.Diagnostics.CodeAnalysis;
 
+#pragma warning disable SA1121 // explicitly using type aliases instead of built-in types
 #if BIT64
 using nuint = System.UInt64;
 #else
@@ -95,8 +97,7 @@ namespace System.Runtime.InteropServices
             return string.CreateStringFromEncoding((byte*)ptr, nbBytes, Encoding.UTF8);
         }
 
-        // TODO-NULLABLE: This has different behavior from the other PtrToString(IntPtr, int) functions
-        public static unsafe string? PtrToStringUTF8(IntPtr ptr, int byteLen)
+        public static unsafe string PtrToStringUTF8(IntPtr ptr, int byteLen)
         {
             if (ptr == IntPtr.Zero)
             {
@@ -530,9 +531,8 @@ namespace System.Runtime.InteropServices
             }
         }
 
-        public static void StructureToPtr<T>(T structure, IntPtr ptr, bool fDeleteOld)
+        public static void StructureToPtr<T>([DisallowNull] T structure, IntPtr ptr, bool fDeleteOld)
         {
-            // TODO-NULLABLE-GENERIC: T cannot be null
             StructureToPtr((object)structure!, ptr, fDeleteOld);
         }
 
@@ -571,13 +571,12 @@ namespace System.Runtime.InteropServices
             PtrToStructureHelper(ptr, structure, allowValueClasses: false);
         }
 
-        public static void PtrToStructure<T>(IntPtr ptr, T structure)
+        public static void PtrToStructure<T>(IntPtr ptr, [DisallowNull] T structure)
         {
-            // TODO-NULLABLE-GENERIC: T cannot be null
             PtrToStructure(ptr, (object)structure!);
         }
 
-        // TODO-NULLABLE-GENERIC: T can be null
+        [return: MaybeNull]
         public static T PtrToStructure<T>(IntPtr ptr) => (T)PtrToStructure(ptr, typeof(T))!;
 
         public static void DestroyStructure<T>(IntPtr ptr) => DestroyStructure(ptr, typeof(T));
@@ -663,7 +662,7 @@ namespace System.Runtime.InteropServices
                 throw new ArgumentNullException(nameof(s));
             }
 
-            return s.MarshalToString(globalAlloc: true, unicode: true); ;
+            return s.MarshalToString(globalAlloc: true, unicode: true);
         }
 
         public static unsafe IntPtr StringToHGlobalAnsi(string? s)
@@ -704,7 +703,7 @@ namespace System.Runtime.InteropServices
             }
 
             IntPtr hglobal = AllocHGlobal((IntPtr)nb);
-            
+
             fixed (char* firstChar = s)
             {
                 string.wstrcpy((char*)hglobal, firstChar, s.Length + 1);
@@ -898,10 +897,9 @@ namespace System.Runtime.InteropServices
             return GetFunctionPointerForDelegateInternal(d);
         }
 
-        public static IntPtr GetFunctionPointerForDelegate<TDelegate>(TDelegate d)
+        public static IntPtr GetFunctionPointerForDelegate<TDelegate>(TDelegate d) where TDelegate : notnull
         {
-            // TODO-NULLABLE-GENERIC: T cannot be null
-            return GetFunctionPointerForDelegate((Delegate)(object)d!);
+            return GetFunctionPointerForDelegate((Delegate)(object)d);
         }
 
         public static int GetHRForLastWin32Error()
@@ -927,7 +925,7 @@ namespace System.Runtime.InteropServices
             FreeBSTR(s);
         }
 
-        public unsafe static void ZeroFreeCoTaskMemAnsi(IntPtr s)
+        public static unsafe void ZeroFreeCoTaskMemAnsi(IntPtr s)
         {
             ZeroFreeCoTaskMemUTF8(s);
         }
@@ -952,7 +950,7 @@ namespace System.Runtime.InteropServices
             FreeCoTaskMem(s);
         }
 
-        public unsafe static void ZeroFreeGlobalAllocAnsi(IntPtr s)
+        public static unsafe void ZeroFreeGlobalAllocAnsi(IntPtr s)
         {
             if (s == IntPtr.Zero)
             {

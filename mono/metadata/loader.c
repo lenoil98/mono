@@ -405,11 +405,11 @@ find_method_in_class (MonoClass *klass, const char *name, const char *qname, con
 				continue;
 
 			method = mono_get_method_checked (klass_image, MONO_TOKEN_METHOD_DEF | (first_idx + i + 1), klass, NULL, error);
-			if (!mono_error_ok (error)) //bail out if we hit a loader error
+			if (!is_ok (error)) //bail out if we hit a loader error
 				return NULL;
 			if (method) {
 				other_sig = mono_method_signature_checked (method, error);
-				if (!mono_error_ok (error)) //bail out if we hit a loader error
+				if (!is_ok (error)) //bail out if we hit a loader error
 					return NULL;				
 				if (other_sig && (sig->call_convention != MONO_CALL_VARARG) && mono_metadata_signature_equal (sig, other_sig))
 					return method;
@@ -445,7 +445,7 @@ find_method_in_class (MonoClass *klass, const char *name, const char *qname, con
 		      (name && !strcmp (m->name, name))))
 			continue;
 		msig = mono_method_signature_checked (m, error);
-		if (!mono_error_ok (error)) //bail out if we hit a loader error 
+		if (!is_ok (error)) //bail out if we hit a loader error 
 			return NULL;
 
 		if (!msig)
@@ -480,10 +480,10 @@ find_method (MonoClass *in_class, MonoClass *ic, const char* name, MonoMethodSig
 	if (ic) {
 		class_name = mono_type_get_name_full (m_class_get_byval_arg (ic), MONO_TYPE_NAME_FORMAT_IL);
 
-		qname = g_strconcat (class_name, ".", name, NULL);
+		qname = g_strconcat (class_name, ".", name, (const char*)NULL);
 		const char *ic_name_space = m_class_get_name_space (ic);
 		if (ic_name_space && ic_name_space [0])
-			fqname = g_strconcat (ic_name_space, ".", class_name, ".", name, NULL);
+			fqname = g_strconcat (ic_name_space, ".", class_name, ".", name, (const char*)NULL);
 		else
 			fqname = NULL;
 	} else
@@ -492,7 +492,7 @@ find_method (MonoClass *in_class, MonoClass *ic, const char* name, MonoMethodSig
 	while (in_class) {
 		g_assert (from_class);
 		result = find_method_in_class (in_class, name, qname, fqname, sig, from_class, error);
-		if (result || !mono_error_ok (error))
+		if (result || !is_ok (error))
 			goto out;
 
 		if (name [0] == '.' && (!strcmp (name, ".ctor") || !strcmp (name, ".cctor")))
@@ -517,10 +517,10 @@ find_method (MonoClass *in_class, MonoClass *ic, const char* name, MonoMethodSig
 			char *ic_qname, *ic_fqname, *ic_class_name;
 			
 			ic_class_name = mono_type_get_name_full (m_class_get_byval_arg (in_ic), MONO_TYPE_NAME_FORMAT_IL);
-			ic_qname = g_strconcat (ic_class_name, ".", name, NULL); 
+			ic_qname = g_strconcat (ic_class_name, ".", name, (const char*)NULL);
 			const char *in_ic_name_space = m_class_get_name_space (in_ic);
 			if (in_ic_name_space && in_ic_name_space [0])
-				ic_fqname = g_strconcat (in_ic_name_space, ".", ic_class_name, ".", name, NULL);
+				ic_fqname = g_strconcat (in_ic_name_space, ".", ic_class_name, ".", name, (const char*)NULL);
 			else
 				ic_fqname = NULL;
 
@@ -528,7 +528,7 @@ find_method (MonoClass *in_class, MonoClass *ic, const char* name, MonoMethodSig
 			g_free (ic_class_name);
 			g_free (ic_fqname);
 			g_free (ic_qname);
-			if (result || !mono_error_ok (error))
+			if (result || !is_ok (error))
 				goto out;
 		}
 
@@ -541,7 +541,7 @@ find_method (MonoClass *in_class, MonoClass *ic, const char* name, MonoMethodSig
 		result = find_method_in_class (mono_defaults.object_class, name, qname, fqname, sig, mono_defaults.object_class, error);
 
 	//we did not find the method
-	if (!result && mono_error_ok (error))
+	if (!result && is_ok (error))
 		mono_error_set_method_missing (error, initial_class, name, sig, NULL);
 		
  out:
@@ -566,12 +566,12 @@ inflate_generic_signature_checked (MonoImage *image, MonoMethodSignature *sig, M
 	res->param_count = sig->param_count;
 	res->sentinelpos = -1;
 	res->ret = mono_class_inflate_generic_type_checked (sig->ret, context, error);
-	if (!mono_error_ok (error))
+	if (!is_ok (error))
 		goto fail;
 	is_open = mono_class_is_open_constructed_type (res->ret);
 	for (i = 0; i < sig->param_count; ++i) {
 		res->params [i] = mono_class_inflate_generic_type_checked (sig->params [i], context, error);
-		if (!mono_error_ok (error))
+		if (!is_ok (error))
 			goto fail;
 
 		if (!is_open)
@@ -609,7 +609,7 @@ mono_inflate_generic_signature (MonoMethodSignature *sig, MonoGenericContext *co
 	MonoMethodSignature *res, *cached;
 
 	res = inflate_generic_signature_checked (NULL, sig, context, error);
-	if (!mono_error_ok (error))
+	if (!is_ok (error))
 		return NULL;
 	cached = mono_metadata_get_inflated_signature (res, context);
 	if (cached != res)
@@ -738,7 +738,7 @@ mono_method_get_signature_checked (MonoMethod *method, MonoImage *image, guint32
 
 		/* This signature is not owned by a MonoMethod, so need to cache */
 		sig = inflate_generic_signature_checked (image, sig, context, error);
-		if (!mono_error_ok (error))
+		if (!is_ok (error))
 			return NULL;
 
 		cached = mono_metadata_get_inflated_signature (sig, context);
@@ -749,7 +749,7 @@ mono_method_get_signature_checked (MonoMethod *method, MonoImage *image, guint32
 		sig = cached;
 	}
 
-	g_assert (mono_error_ok (error));
+	g_assert (is_ok (error));
 	return sig;
 }
 
@@ -893,13 +893,13 @@ method_from_memberref (MonoImage *image, guint32 idx, MonoGenericContext *typesp
 		goto fail;
 	}
 
-	if (!method && mono_error_ok (error))
+	if (!method && is_ok (error))
 		mono_error_set_method_missing (error, klass, mname, sig, "Failed to load due to unknown reasons");
 
 	return method;
 
 fail:
-	g_assert (!mono_error_ok (error));
+	g_assert (!is_ok (error));
 	return NULL;
 }
 
@@ -936,7 +936,7 @@ method_from_methodspec (MonoImage *image, MonoGenericContext *context, guint32 i
 
 	if (context && inst->is_open) {
 		inst = mono_metadata_inflate_generic_inst (inst, context, error);
-		if (!mono_error_ok (error))
+		if (!is_ok (error))
 			return NULL;
 	}
 
@@ -1667,8 +1667,20 @@ pinvoke_probe_for_module_relative_directories (MonoImage *image, const char *fil
 
 							base = g_path_get_dirname (resolvedname);
 							newbase = g_path_get_dirname(base);
-							mdirname = g_strdup_printf ("%s/lib", newbase);
 
+							// On Android the executable for the application is going to be /system/bin/app_process{32,64} depending on
+							// the application's architecture. However, libraries for the different architectures live in different
+							// subdirectories of `/system`: `lib` for 32-bit apps and `lib64` for 64-bit ones. Thus appending `/lib` below
+							// will fail to load the DSO for a 64-bit app, even if it exists there, because it will have a different
+							// architecture. This is the cause of https://github.com/xamarin/xamarin-android/issues/2780 and the ifdef
+							// below is the fix.
+							mdirname = g_strdup_printf (
+#if defined(TARGET_ANDROID) && (defined(TARGET_ARM64) || defined(TARGET_AMD64))
+									"%s/lib64",
+#else
+									"%s/lib",
+#endif
+									newbase);
 							g_free (resolvedname);
 							g_free (base);
 							g_free (newbase);
@@ -1756,23 +1768,23 @@ pinvoke_probe_for_symbol (MonoDl *module, MonoMethodPInvoke *piinfo, const char 
 					case PINVOKE_ATTRIBUTE_CHAR_SET_UNICODE:
 						/* Try the mangled name first */
 						if (mangle_charset == 0)
-							mangled_name = g_strconcat (import, "W", NULL);
+							mangled_name = g_strconcat (import, "W", (const char*)NULL);
 						break;
 					case PINVOKE_ATTRIBUTE_CHAR_SET_AUTO:
 #ifdef HOST_WIN32
 						if (mangle_charset == 0)
-							mangled_name = g_strconcat (import, "W", NULL);
+							mangled_name = g_strconcat (import, "W", (const char*)NULL);
 #else
 						/* Try the mangled name last */
 						if (mangle_charset == 1)
-							mangled_name = g_strconcat (import, "A", NULL);
+							mangled_name = g_strconcat (import, "A", (const char*)NULL);
 #endif
 						break;
 					case PINVOKE_ATTRIBUTE_CHAR_SET_ANSI:
 					default:
 						/* Try the mangled name last */
 						if (mangle_charset == 1)
-							mangled_name = g_strconcat (import, "A", NULL);
+							mangled_name = g_strconcat (import, "A", (const char*)NULL);
 						break;
 					}
 
@@ -2182,6 +2194,9 @@ mono_get_method_constrained_checked (MonoImage *image, guint32 token, MonoClass 
 void
 mono_free_method  (MonoMethod *method)
 {
+	if (!method)
+		return;
+
 	MONO_PROFILER_RAISE (method_free, (method));
 	
 	/* FIXME: This hack will go away when the profiler will support freeing methods */
@@ -2357,16 +2372,23 @@ mono_method_get_marshal_info (MonoMethod *method, MonoMarshalSpec **mspecs)
 				((MonoDynamicImage*)m_class_get_image (method->klass))->method_aux_hash, method);
 		if (method_aux && method_aux->param_marshall) {
 			MonoMarshalSpec **dyn_specs = method_aux->param_marshall;
-			for (i = 0; i < signature->param_count + 1; ++i)
+			for (i = 0; i < signature->param_count + 1; ++i) {
 				if (dyn_specs [i]) {
 					mspecs [i] = g_new0 (MonoMarshalSpec, 1);
 					memcpy (mspecs [i], dyn_specs [i], sizeof (MonoMarshalSpec));
-					mspecs [i]->data.custom_data.custom_name = g_strdup (dyn_specs [i]->data.custom_data.custom_name);
-					mspecs [i]->data.custom_data.cookie = g_strdup (dyn_specs [i]->data.custom_data.cookie);
+					if (mspecs [i]->native == MONO_NATIVE_CUSTOM) {
+						mspecs [i]->data.custom_data.custom_name = g_strdup (dyn_specs [i]->data.custom_data.custom_name);
+						mspecs [i]->data.custom_data.cookie = g_strdup (dyn_specs [i]->data.custom_data.cookie);
+					}
 				}
+			}
 		}
 		return;
 	}
+
+	/* dynamic method added to non-dynamic image */
+	if (method->dynamic)
+		return;
 
 	mono_class_init_internal (klass);
 
@@ -2651,12 +2673,13 @@ mono_loader_unlock_if_inited (void)
 }
 
 /**
- * mono_method_signature_checked:
+ * mono_method_signature_checked_slow:
  *
  * Return the signature of the method M. On failure, returns NULL, and ERR is set.
+ * Call mono_method_signature_checked instead.
  */
 MonoMethodSignature*
-mono_method_signature_checked (MonoMethod *m, MonoError *error)
+mono_method_signature_checked_slow (MonoMethod *m, MonoError *error)
 {
 	int idx;
 	MonoImage* img;
@@ -2680,7 +2703,7 @@ mono_method_signature_checked (MonoMethod *m, MonoError *error)
 		/* the lock is recursive */
 		signature = mono_method_signature_internal (imethod->declaring);
 		signature = inflate_generic_signature_checked (m_class_get_image (imethod->declaring->klass), signature, mono_method_get_context (m), error);
-		if (!mono_error_ok (error))
+		if (!is_ok (error))
 			return NULL;
 
 		mono_atomic_fetch_add_i32 (&inflated_signatures_size, mono_metadata_signature_size (signature));
@@ -2810,11 +2833,12 @@ mono_method_signature_checked (MonoMethod *m, MonoError *error)
 }
 
 /**
- * mono_method_signature_internal:
+ * mono_method_signature_internal_slow:
  * \returns the signature of the method \p m. On failure, returns NULL.
+ * Call mono_method_signature_internal instead.
  */
 MonoMethodSignature*
-mono_method_signature_internal (MonoMethod *m)
+mono_method_signature_internal_slow (MonoMethod *m)
 {
 	ERROR_DECL (error);
 	MonoMethodSignature *sig = mono_method_signature_checked (m, error);
@@ -2894,7 +2918,10 @@ mono_method_get_header_internal (MonoMethod *method, MonoError *error)
 	// FIXME: for internal callers maybe it makes sense to do this check at the call site, not
 	// here?
 	if (mono_method_has_no_body (method)) {
-		mono_error_set_bad_image (error, img, "Method has no body");
+		if (method->is_reabstracted == 1)
+			mono_error_set_generic_error (error, "System", "EntryPointNotFoundException", "%s", method->name);
+		else
+			mono_error_set_bad_image (error, img, "Method has no body");
 		return NULL;
 	}
 

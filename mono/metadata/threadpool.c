@@ -21,13 +21,17 @@
 //
 // Ported from C++ to C and adjusted to Mono runtime
 
+#include <config.h>
+
+#ifndef ENABLE_NETCORE
+
 #include <stdlib.h>
 #define _USE_MATH_DEFINES // needed by MSVC to define math constants
 #include <math.h>
-#include <config.h>
 #include <glib.h>
 
 #include <mono/metadata/class-internals.h>
+#include <mono/metadata/domain-internals.h>
 #include <mono/metadata/exception.h>
 #include <mono/metadata/gc-internals.h>
 #include <mono/metadata/object.h>
@@ -101,7 +105,7 @@ static ThreadPool threadpool;
 		} while (mono_atomic_cas_i32 (&threadpool.counters.as_gint32, (var).as_gint32, __old.as_gint32) != __old.as_gint32); \
 	} while (0)
 
-static inline ThreadPoolCounter
+static ThreadPoolCounter
 COUNTER_READ (void)
 {
 	ThreadPoolCounter counter;
@@ -109,13 +113,13 @@ COUNTER_READ (void)
 	return counter;
 }
 
-static inline void
+static void
 domains_lock (void)
 {
 	mono_coop_mutex_lock (&threadpool.domains_lock);
 }
 
-static inline void
+static void
 domains_unlock (void)
 {
 	mono_coop_mutex_unlock (&threadpool.domains_lock);
@@ -186,11 +190,11 @@ mono_threadpool_enqueue_work_item (MonoDomain *domain, MonoObject *work_item, Mo
 		mono_runtime_invoke_checked (unsafe_queue_custom_work_item_method, NULL, args, error);
 	} else {
 		mono_thread_push_appdomain_ref (domain);
-		if (mono_domain_set (domain, FALSE)) {
+		if (mono_domain_set_fast (domain, FALSE)) {
 			mono_runtime_invoke_checked (unsafe_queue_custom_work_item_method, NULL, args, error);
-			mono_domain_set (current_domain, TRUE);
+			mono_domain_set_fast (current_domain, TRUE);
 		} else {
-			// mono_domain_set failing still leads to success.
+			// mono_domain_set_fast failing still leads to success.
 		}
 		mono_thread_pop_appdomain_ref ();
 	}
@@ -280,14 +284,19 @@ try_invoke_perform_wait_callback (MonoObject** exc, MonoError *error)
 {
 	HANDLE_FUNCTION_ENTER ();
 	error_init (error);
-	MonoObject *res = mono_runtime_try_invoke (mono_defaults.threadpool_perform_wait_callback_method, NULL, NULL, exc, error);
+	MonoObject * const res = mono_runtime_try_invoke (mono_defaults.threadpool_perform_wait_callback_method, NULL, NULL, exc, error);
 	HANDLE_FUNCTION_RETURN_VAL (res);
+}
+
+static gsize
+set_thread_name (MonoInternalThread *thread)
+{
+	return mono_thread_set_name_constant_ignore_error (thread, "Thread Pool Worker", MonoSetThreadNameFlag_Reset);
 }
 
 static void
 worker_callback (void)
 {
-	ERROR_DECL (error);
 	ThreadPoolDomain *tpdomain, *previous_tpdomain;
 	ThreadPoolCounter counter;
 	MonoInternalThread *thread;
@@ -320,6 +329,11 @@ worker_callback (void)
 	 */
 	mono_defaults.threadpool_perform_wait_callback_method->save_lmf = TRUE;
 
+	gsize name_generation = thread->name.generation;
+	/* Set the name if this is the first call to worker_callback on this thread */
+	if (name_generation == 0)
+	   name_generation = set_thread_name (thread);
+
 	domains_lock ();
 
 	previous_tpdomain = NULL;
@@ -351,21 +365,26 @@ worker_callback (void)
 
 		domains_unlock ();
 
-		MonoString *thread_name = mono_string_new_checked (mono_get_root_domain (), "Thread Pool Worker", error);
-		mono_error_assert_ok (error);
-		mono_thread_set_name_internal (thread, thread_name, FALSE, TRUE, error);
-		mono_error_assert_ok (error);
+		// Any thread can set any other thread name at any time.
+		// So this is unavoidably racy.
+		// This only partly fights against that -- i.e. not atomic and not a loop.
+		// It is reliable against the thread setting its own name, and somewhat
+		// reliable against other threads setting this thread's name.
+		if (name_generation != thread->name.generation)
+			name_generation = set_thread_name (thread);
 
 		mono_thread_clear_and_set_state (thread,
 			(MonoThreadState)~ThreadState_Background,
 			ThreadState_Background);
 
 		mono_thread_push_appdomain_ref (tpdomain->domain);
-		if (mono_domain_set (tpdomain->domain, FALSE)) {
+		if (mono_domain_set_fast (tpdomain->domain, FALSE)) {
 			MonoObject *exc = NULL, *res;
 
+			ERROR_DECL (error);
+
 			res = try_invoke_perform_wait_callback (&exc, error);
-			if (exc || !mono_error_ok(error)) {
+			if (exc || !is_ok(error)) {
 				if (exc == NULL)
 					exc = (MonoObject *) mono_error_convert_to_exception (error);
 				else
@@ -375,9 +394,13 @@ worker_callback (void)
 				retire = TRUE;
 			}
 
-			mono_domain_set (mono_get_root_domain (), TRUE);
+			mono_domain_set_fast (mono_get_root_domain (), TRUE);
 		}
 		mono_thread_pop_appdomain_ref ();
+
+		/* Reset name after every callback */
+		if (name_generation != thread->name.generation)
+			name_generation = set_thread_name (thread);
 
 		domains_lock ();
 
@@ -512,7 +535,7 @@ mono_threadpool_end_invoke (MonoAsyncResult *ares, MonoArray **out_args, MonoObj
 gboolean
 mono_threadpool_remove_domain_jobs (MonoDomain *domain, int timeout)
 {
-	gint64 end;
+	gint64 end = 0;
 	ThreadPoolDomain *tpdomain;
 	gboolean ret;
 
@@ -798,3 +821,5 @@ ves_icall_System_Threading_ThreadPool_RequestWorkerThread (MonoError *error)
 	mono_refcount_dec (&threadpool);
 	return TRUE;
 }
+
+#endif /* !ENABLE_NETCORE */

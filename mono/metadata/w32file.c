@@ -187,6 +187,8 @@ static guint32 convert_attrs(MonoFileAttributes attrs)
 
 /* System.IO.MonoIO internal calls */
 
+#if !ENABLE_NETCORE
+
 MonoBoolean
 ves_icall_System_IO_MonoIO_CreateDirectory (const gunichar2 *path, gint32 *error)
 {
@@ -504,6 +506,19 @@ ves_icall_System_IO_MonoIO_Close (HANDLE handle, gint32 *error)
 	return(ret);
 }
 
+MonoBoolean
+ves_icall_System_IO_MonoIO_Cancel (HANDLE handle, gint32 *error)
+{
+	gboolean ret;
+	*error=ERROR_SUCCESS;
+
+	ret = mono_w32file_cancel (handle);
+	if (ret == FALSE)
+		*error = mono_w32error_get_last ();
+
+	return ret;
+}
+
 gint32 
 ves_icall_System_IO_MonoIO_Read (HANDLE handle, MonoArrayHandle dest,
 				 gint32 dest_offset, gint32 count,
@@ -516,7 +531,7 @@ ves_icall_System_IO_MonoIO_Read (HANDLE handle, MonoArrayHandle dest,
 
 	*io_error=ERROR_SUCCESS;
 
-	MONO_CHECK_ARG_NULL (MONO_HANDLE_RAW (dest), 0);
+	MONO_CHECK_ARG_NULL_HANDLE (dest, 0);
 
 	if (dest_offset > mono_array_handle_length (dest) - count) {
 		mono_error_set_argument (error, "array", "array too small. numBytes/offset wrong.");
@@ -546,7 +561,7 @@ ves_icall_System_IO_MonoIO_Write (HANDLE handle, MonoArrayHandle src,
 
 	*io_error=ERROR_SUCCESS;
 
-	MONO_CHECK_ARG_NULL (MONO_HANDLE_RAW (src), 0);
+	MONO_CHECK_ARG_NULL_HANDLE (src, 0);
 	
 	if (src_offset > mono_array_handle_length (src) - count) {
 		mono_error_set_argument (error, "array", "array too small. numBytes/offset wrong.");
@@ -839,6 +854,18 @@ void ves_icall_System_IO_MonoIO_Unlock (HANDLE handle, gint64 position,
 	mono_w32file_unlock (handle, position, length, error);
 }
 
+
+#ifndef HOST_WIN32
+void mono_w32handle_dump (void);
+
+void ves_icall_System_IO_MonoIO_DumpHandles (void)
+{
+	mono_w32handle_dump ();
+}
+#endif /* !HOST_WIN32 */
+
+#endif /* !ENABLE_NETCORE */
+
 //Support for io-layer free mmap'd files.
 
 #if defined (TARGET_IOS) || defined (TARGET_ANDROID)
@@ -883,12 +910,3 @@ mono_filesize_from_fd (int fd)
 }
 
 #endif
-
-#ifndef HOST_WIN32
-void mono_w32handle_dump (void);
-
-void ves_icall_System_IO_MonoIO_DumpHandles (void)
-{
-	mono_w32handle_dump ();
-}
-#endif /* !HOST_WIN32 */

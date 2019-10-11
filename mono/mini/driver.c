@@ -23,6 +23,7 @@
 #endif
 
 #include <mono/metadata/assembly-internals.h>
+#include <mono/metadata/image-internals.h>
 #include <mono/metadata/loader.h>
 #include <mono/metadata/tabledefs.h>
 #include <mono/metadata/class.h>
@@ -75,7 +76,8 @@
 static FILE *mini_stats_fd;
 
 static void mini_usage (void);
-static void mono_runtime_set_execution_mode (MonoEEMode mode);
+static void mono_runtime_set_execution_mode (int mode);
+static void mono_runtime_set_execution_mode_full (int mode, gboolean override);
 static int mono_jit_exec_internal (MonoDomain *domain, MonoAssembly *assembly, int argc, char *argv[]);
 
 #ifdef HOST_WIN32
@@ -664,7 +666,7 @@ mini_regression_list (int verbose, int count, char *images [])
 	total_run =  total = 0;
 	for (i = 0; i < count; ++i) {
 		MonoAssemblyOpenRequest req;
-		mono_assembly_request_prepare (&req.request, sizeof (req), MONO_ASMCTX_DEFAULT);
+		mono_assembly_request_prepare_open (&req, MONO_ASMCTX_DEFAULT, mono_domain_default_alc (mono_get_root_domain ()));
 		ass = mono_assembly_request_open (images [i], &req, NULL);
 		if (!ass) {
 			g_warning ("failed to load assembly: %s", images [i]);
@@ -719,7 +721,7 @@ interp_regression_step (MonoImage *image, int verbose, int *total_run, int *tota
 			}
 
 			result_obj = mini_get_interp_callbacks ()->runtime_invoke (method, NULL, NULL, &exc, interp_error);
-			if (!mono_error_ok (interp_error)) {
+			if (!is_ok (interp_error)) {
 				cfailed++;
 				g_print ("Test '%s' execution failed.\n", method->name);
 			} else if (exc != NULL) {
@@ -791,7 +793,7 @@ mono_interp_regression_list (int verbose, int count, char *images [])
 	total_run = total = 0;
 	for (i = 0; i < count; ++i) {
 		MonoAssemblyOpenRequest req;
-		mono_assembly_request_prepare (&req.request, sizeof (req), MONO_ASMCTX_DEFAULT);
+		mono_assembly_request_prepare_open (&req, MONO_ASMCTX_DEFAULT, mono_domain_default_alc (mono_get_root_domain ()));
 		MonoAssembly *ass = mono_assembly_request_open (images [i], &req, NULL);
 		if (!ass) {
 			g_warning ("failed to load assembly: %s", images [i]);
@@ -1201,14 +1203,14 @@ compile_all_methods_thread_main_inner (CompileAllThreadArgs *args)
 		if (mono_use_interpreter) {
 			mini_get_interp_callbacks ()->create_method_pointer (method, TRUE, error);
 			// FIXME There are a few failures due to DllNotFoundException related to System.Native
-			if (verbose && !mono_error_ok (error))
+			if (verbose && !is_ok (error))
 				g_print ("Compilation of %s failed\n", mono_method_full_name (method, TRUE));
 		} else {
 			cfg = mini_method_compile (method, mono_get_optimizations_for_method (method, args->opts), mono_get_root_domain (), (JitFlags)JIT_FLAG_DISCARD_RESULTS, 0, -1);
 			if (cfg->exception_type != MONO_EXCEPTION_NONE) {
 				const char *msg = cfg->exception_message;
 				if (cfg->exception_type == MONO_EXCEPTION_MONO_ERROR)
-					msg = mono_error_get_message (&cfg->error);
+					msg = mono_error_get_message (cfg->error);
 				g_print ("Compilation of %s failed with exception '%s':\n", mono_method_full_name (cfg->method, TRUE), msg);
 				fail_count ++;
 			}
@@ -1351,10 +1353,15 @@ static void main_thread_handler (gpointer user_data)
 
 		/* Treat the other arguments as assemblies to compile too */
 		for (i = 0; i < main_args->argc; ++i) {
-			assembly = mono_domain_assembly_open (main_args->domain, main_args->argv [i]);
+			assembly = mono_domain_assembly_open_internal (main_args->domain, mono_domain_default_alc (main_args->domain), main_args->argv [i]);
 			if (!assembly) {
-				fprintf (stderr, "Can not open image %s\n", main_args->argv [i]);
-				exit (1);
+				if (mono_is_problematic_file (main_args->argv [i])) {
+					fprintf (stderr, "Info: AOT of problematic assembly %s skipped. This is expected.\n", main_args->argv [i]);
+					continue;
+				} else {
+					fprintf (stderr, "Can not open image %s\n", main_args->argv [i]);
+					exit (1);
+				}
 			}
 			/* Check that the assembly loaded matches the filename */
 			{
@@ -1381,7 +1388,7 @@ static void main_thread_handler (gpointer user_data)
 			}
 		}
 	} else {
-		assembly = mono_domain_assembly_open (main_args->domain, main_args->file);
+		assembly = mono_domain_assembly_open_internal (main_args->domain, mono_domain_default_alc (main_args->domain), main_args->file);
 		if (!assembly){
 			fprintf (stderr, "Can not open image %s\n", main_args->file);
 			exit (1);
@@ -1422,7 +1429,7 @@ load_agent (MonoDomain *domain, char *desc)
 	}
 
 	MonoAssemblyOpenRequest req;
-	mono_assembly_request_prepare (&req.request, sizeof (req), MONO_ASMCTX_DEFAULT);
+	mono_assembly_request_prepare_open (&req, MONO_ASMCTX_DEFAULT, mono_domain_default_alc (mono_get_root_domain ()));
 	agent_assembly = mono_assembly_request_open (agent, &req, &open_status);
 	if (!agent_assembly) {
 		fprintf (stderr, "Cannot open agent assembly '%s': %s.\n", agent, mono_image_strerror (open_status));
@@ -1549,6 +1556,7 @@ mini_usage (void)
 		"    --verbose, -v          Increases the verbosity level\n"
 		"    --help, -h             Show usage information\n"
 		"    --version, -V          Show version information\n"
+		"    --version=number       Show version number\n"
 		"    --runtime=VERSION      Use the VERSION runtime, instead of autodetecting\n"
 		"    --optimize=OPT         Turns on or off a specific optimization\n"
 		"                           Use --list-opt to get a list of optimizations\n"
@@ -1669,6 +1677,7 @@ mono_get_version_info (void)
 #endif
 #endif
 
+	mono_threads_suspend_policy_init ();
 	g_string_append_printf (output, "\tSuspend:       %s\n", mono_threads_suspend_policy_name (mono_threads_suspend_policy ()));
 
 	return g_string_free (output, FALSE);
@@ -1883,12 +1892,8 @@ apply_root_domain_configuration_file_bindings (MonoDomain *domain, char *root_do
 }
 
 static void
-mono_enable_interp (const char *opts)
+mono_check_interp_supported (void)
 {
-	mono_runtime_set_execution_mode (MONO_EE_MODE_INTERP);
-	if (opts)
-		mono_interp_opts_string = opts;
-
 #ifdef DISABLE_INTERPRETER
 	g_error ("Mono IL interpreter support is missing\n");
 #endif
@@ -1900,7 +1905,6 @@ mono_enable_interp (const char *opts)
 #ifndef MONO_ARCH_INTERPRETER_SUPPORTED
 	g_error ("--interpreter not supported on this architecture.\n");
 #endif
-
 }
 
 static int
@@ -1976,7 +1980,6 @@ mono_main (int argc, char* argv[])
 	MonoAssembly *assembly;
 	MonoMethodDesc *desc;
 	MonoMethod *method;
-	MonoCompile *cfg;
 	MonoDomain *domain;
 	MonoImageOpenStatus open_status;
 	const char* aname, *mname = NULL;
@@ -2047,6 +2050,9 @@ mono_main (int argc, char* argv[])
 			g_free (full_opts);
 		} else if (strcmp (argv [i], "--verbose") == 0 || strcmp (argv [i], "-v") == 0) {
 			mini_verbose_level++;
+		} else if (strcmp (argv [i], "--version=number") == 0) {
+			g_print ("%s\n", VERSION);
+			return 0;
 		} else if (strcmp (argv [i], "--version") == 0 || strcmp (argv [i], "-V") == 0) {
 			char *build = mono_get_runtime_build_info ();
 			char *gc_descr;
@@ -2340,10 +2346,13 @@ mono_main (int argc, char* argv[])
 #endif
 		} else if (strcmp (argv [i], "--nollvm") == 0){
 			mono_use_llvm = FALSE;
+		} else if (strcmp (argv [i], "--ffast-math") == 0){
+			mono_use_fast_math = TRUE;
 		} else if ((strcmp (argv [i], "--interpreter") == 0) || !strcmp (argv [i], "--interp")) {
-			mono_enable_interp (NULL);
+			mono_runtime_set_execution_mode (MONO_EE_MODE_INTERP);
 		} else if (strncmp (argv [i], "--interp=", 9) == 0) {
-			mono_enable_interp (argv [i] + 9);
+			mono_runtime_set_execution_mode_full (MONO_EE_MODE_INTERP, FALSE);
+			mono_interp_opts_string = argv [i] + 9;
 		} else if (strcmp (argv [i], "--print-icall-table") == 0) {
 #ifdef ENABLE_ICALL_SYMBOL_MAP
 			print_icall_table ();
@@ -2576,9 +2585,9 @@ mono_main (int argc, char* argv[])
 	}
 
 	MonoAssemblyOpenRequest open_req;
-	mono_assembly_request_prepare (&open_req.request, sizeof (open_req), MONO_ASMCTX_DEFAULT);
+	mono_assembly_request_prepare_open (&open_req, MONO_ASMCTX_DEFAULT, mono_domain_default_alc (mono_get_root_domain ()));
 	assembly = mono_assembly_request_open (aname, &open_req, &open_status);
-	if (!assembly) {
+	if (!assembly && !mono_compile_aot) {
 		fprintf (stderr, "Cannot open assembly '%s': %s.\n", aname, mono_image_strerror (open_status));
 		mini_cleanup (domain);
 		return 2;
@@ -2641,6 +2650,7 @@ mono_main (int argc, char* argv[])
 	}
 
 #ifndef DISABLE_JIT
+	MonoCompile *cfg;
 	if (action == DO_DRAW) {
 		int part = 0;
 
@@ -2744,7 +2754,9 @@ mono_main (int argc, char* argv[])
 MonoDomain * 
 mono_jit_init (const char *file)
 {
-	return mini_init (file, NULL);
+	MonoDomain *ret = mini_init (file, NULL);
+	MONO_ENTER_GC_SAFE_UNBALANCED; //once it is not executing any managed code yet, it's safe to run the gc
+	return ret;
 }
 
 /**
@@ -2770,7 +2782,16 @@ mono_jit_init (const char *file)
 MonoDomain * 
 mono_jit_init_version (const char *domain_name, const char *runtime_version)
 {
-	return mini_init (domain_name, runtime_version);
+	MonoDomain *ret = mini_init (domain_name, runtime_version);
+	MONO_ENTER_GC_SAFE_UNBALANCED; //once it is not executing any managed code yet, it's safe to run the gc
+	return ret;
+}
+
+MonoDomain * 
+mono_jit_init_version_for_test_only (const char *domain_name, const char *runtime_version)
+{
+	MonoDomain *ret = mini_init (domain_name, runtime_version);
+	return ret;
 }
 
 /**
@@ -2794,8 +2815,13 @@ mono_jit_set_aot_only (gboolean val)
 }
 
 static void
-mono_runtime_set_execution_mode (MonoEEMode mode)
+mono_runtime_set_execution_mode_full (int mode, gboolean override)
 {
+	static gboolean mode_initialized = FALSE;
+	if (mode_initialized && !override)
+		return;
+
+	mode_initialized = TRUE;
 	memset (&mono_ee_features, 0, sizeof (mono_ee_features));
 
 	switch (mode) {
@@ -2839,6 +2865,7 @@ mono_runtime_set_execution_mode (MonoEEMode mode)
 		break;
 
 	case MONO_EE_MODE_INTERP:
+		mono_check_interp_supported ();
 		mono_use_interpreter = TRUE;
 
 		mono_ee_features.force_use_interpreter = TRUE;
@@ -2851,6 +2878,13 @@ mono_runtime_set_execution_mode (MonoEEMode mode)
 	default:
 		g_error ("Unknown execution-mode %d", mode);
 	}
+
+}
+
+static void
+mono_runtime_set_execution_mode (int mode)
+{
+	mono_runtime_set_execution_mode_full (mode, TRUE);
 }
 
 /**
@@ -2866,7 +2900,7 @@ mono_jit_set_aot_mode (MonoAotMode mode)
 	mono_aot_mode = mode;
 	inited = TRUE;
 	
-	mono_runtime_set_execution_mode ((MonoEEMode)mode);
+	mono_runtime_set_execution_mode (mode);
 }
 
 mono_bool
@@ -2996,14 +3030,14 @@ merge_parsed_options (GPtrArray *parsed_options, int *ref_argc, char **ref_argv 
 static char *
 mono_parse_options (const char *options, int *ref_argc, char **ref_argv [], gboolean prepend)
 {
+	if (options == NULL)
+		return NULL;
+
 	GPtrArray *array = g_ptr_array_new ();
 	GString *buffer = g_string_new ("");
 	const char *p;
 	gboolean in_quotes = FALSE;
 	char quote_char = '\0';
-
-	if (options == NULL)
-		return NULL;
 
 	for (p = options; *p; p++){
 		switch (*p){
@@ -3108,13 +3142,13 @@ mono_win32_parse_options (const char *options, int *ref_argc, char **ref_argv []
 	return NULL;
 }
 
-static inline char *
+static char *
 mono_parse_response_options (const char *options, int *ref_argc, char **ref_argv [], gboolean prepend)
 {
 	return mono_win32_parse_options (options, ref_argc, ref_argv, prepend);
 }
 #else
-static inline char *
+static char *
 mono_parse_response_options (const char *options, int *ref_argc, char **ref_argv [], gboolean prepend)
 {
 	return mono_parse_options (options, ref_argc, ref_argv, prepend);

@@ -21,13 +21,14 @@ endif
 
 if ENABLE_NETCORE
 update_submodules = 
+SUBDIRS = mk llvm mono runtime netcore netcore/corerun
 else
 update_submodules = update_submodules
+SUBDIRS = $(build_with_msvc) mk po $(libgc_dir) llvm mono $(ikvm_native_dir) support data runtime scripts man samples $(tools_dir) $(build_without_msvc) $(docs_dir) acceptance-tests
 endif
 
-SUBDIRS = $(build_with_msvc) mk po $(libgc_dir) llvm mono $(ikvm_native_dir) support data runtime scripts man samples $(tools_dir) $(build_without_msvc) $(docs_dir) acceptance-tests
 # Keep in sync with SUBDIRS
-DIST_SUBDIRS = $(build_with_msvc) m4 mk po $(libgc_dir) llvm mono ikvm-native support data runtime scripts man samples tools $(build_without_msvc) docs acceptance-tests netcore
+DIST_SUBDIRS = $(build_with_msvc) m4 mk po $(libgc_dir) llvm mono ikvm-native support data runtime scripts man samples tools $(build_without_msvc) docs acceptance-tests netcore netcore/corerun
 
 all: $(update_submodules)
 
@@ -45,9 +46,10 @@ EXTRA_DIST= \
 	winconfig.h 		\
 	code_of_conduct.md 	\
 	external		\
+	netcore/Makefile	\
 	mcs/class/referencesource
 
-DISTCHECK_CONFIGURE_FLAGS = EXTERNAL_MCS=false EXTERNAL_RUNTIME=false
+DISTCHECK_CONFIGURE_FLAGS = EXTERNAL_RUNTIME=false
 
 # Distribute the 'mcs' tree too
 GIT_DIR ?= $(srcdir)/.git

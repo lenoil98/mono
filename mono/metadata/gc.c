@@ -114,7 +114,7 @@ typedef struct {
 	MonoCoopMutex *mutex;
 } BreakCoopAlertableWaitUD;
 
-static inline void
+static void
 break_coop_alertable_wait (gpointer user_data)
 {
 	BreakCoopAlertableWaitUD *ud = (BreakCoopAlertableWaitUD*)user_data;
@@ -132,7 +132,7 @@ break_coop_alertable_wait (gpointer user_data)
  *   Wait on COND/MUTEX. If ALERTABLE is non-null, the wait can be interrupted.
  * In that case, *ALERTABLE will be set to TRUE, and 0 is returned.
  */
-static inline gint
+static gint
 coop_cond_timedwait_alertable (MonoCoopCond *cond, MonoCoopMutex *mutex, guint32 timeout_ms, gboolean *alertable)
 {
 	BreakCoopAlertableWaitUD *ud;
@@ -257,7 +257,7 @@ mono_gc_run_finalize (void *obj, void *data)
 	/* g_print ("Finalize run on %p %s.%s\n", o, mono_object_class (o)->name_space, mono_object_class (o)->name); */
 
 	/* Use _internal here, since this thread can enter a doomed appdomain */
-	mono_domain_set_internal (mono_object_domain (o));
+	mono_domain_set_internal_with_options (mono_object_domain (o), TRUE);
 
 	/* delegates that have a native function pointer allocated are
 	 * registered for finalization, but they don't have a Finalize
@@ -267,7 +267,7 @@ mono_gc_run_finalize (void *obj, void *data)
 		MonoDelegate* del = (MonoDelegate*)o;
 		if (del->delegate_trampoline)
 			mono_delegate_free_ftnptr ((MonoDelegate*)o);
-		mono_domain_set_internal (caller_domain);
+		mono_domain_set_internal_with_options (caller_domain, TRUE);
 		return;
 	}
 
@@ -280,7 +280,7 @@ mono_gc_run_finalize (void *obj, void *data)
 	 * of finalizer on object with CCW.
 	 */
 	if (mono_marshal_free_ccw (o) && !finalizer) {
-		mono_domain_set_internal (caller_domain);
+		mono_domain_set_internal_with_options (caller_domain, TRUE);
 		return;
 	}
 
@@ -339,7 +339,7 @@ unhandled_error:
 	if (exc)
 		mono_thread_internal_unhandled_exception (exc);
 
-	mono_domain_set_internal (caller_domain);
+	mono_domain_set_internal_with_options (caller_domain, TRUE);
 }
 
 /*
@@ -943,13 +943,9 @@ mono_runtime_do_background_work (void)
 static gsize WINAPI
 finalizer_thread (gpointer unused)
 {
-	ERROR_DECL (error);
 	gboolean wait = TRUE;
 
-	MonoString *finalizer = mono_string_new_checked (mono_get_root_domain (), "Finalizer", error);
-	mono_error_assert_ok (error);
-	mono_thread_set_name_internal (mono_thread_internal_current (), finalizer, FALSE, FALSE, error);
-	mono_error_assert_ok (error);
+	mono_thread_set_name_constant_ignore_error (mono_thread_internal_current (), "Finalizer", MonoSetThreadNameFlag_None);
 
 	/* Register a hazard free queue pump callback */
 	mono_hazard_pointer_install_free_queue_size_callback (hazard_free_queue_is_too_big);

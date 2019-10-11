@@ -45,7 +45,9 @@ using System.Runtime.ExceptionServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Remoting;
 using System.Runtime.Remoting.Contexts;
+#if !DISABLE_REMOTING
 using System.Runtime.Remoting.Channels;
+#endif
 using System.Runtime.Remoting.Messaging;
 using System.Security;
 using System.Security.Permissions;
@@ -72,7 +74,9 @@ namespace System {
 #endif
         #pragma warning disable 169
         #region Sync with object-internals.h
+		#region Sync with LinkerDescriptor/mscorlib.xml
 		IntPtr _mono_app_domain;
+		#endregion
 		#endregion
         #pragma warning restore 169
 		static string _process_guid;
@@ -271,7 +275,11 @@ namespace System {
 					if (rd == CurrentDomain)
 						default_domain = rd;
 					else
+#if DISABLE_REMOTING
+						throw new PlatformNotSupportedException ();
+#else
 						default_domain = (AppDomain) RemotingServices.GetDomainProxy (rd);
+#endif
 				}
 				return default_domain;
 			}
@@ -750,7 +758,7 @@ namespace System {
 				throw new FileNotFoundException (null, assemblyRef.Name);
 
 			string cb = assemblyRef.CodeBase;
-			if (cb.ToLower (CultureInfo.InvariantCulture).StartsWith ("file://"))
+			if (cb.StartsWith ("file://", StringComparison.OrdinalIgnoreCase))
 				cb = new Mono.Security.Uri (cb).LocalPath;
 
 			try {
@@ -1413,6 +1421,7 @@ namespace System {
 				UnhandledException (this, args);
 		}
 
+#if !DISABLE_REMOTING
 		internal byte[] GetMarshalledDomainObjRef ()
 		{
 			ObjRef oref = RemotingServices.Marshal (AppDomain.CurrentDomain, null, typeof (AppDomain));
@@ -1438,6 +1447,7 @@ namespace System {
 			else
 				arrResponse = null;
 		}
+#endif
 
 #pragma warning restore 169
 

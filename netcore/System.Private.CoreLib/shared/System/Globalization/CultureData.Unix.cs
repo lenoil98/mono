@@ -14,9 +14,9 @@ namespace System.Globalization
     internal partial class CultureData
     {
         // ICU constants
-        const int ICU_ULOC_KEYWORD_AND_VALUES_CAPACITY = 100; // max size of keyword or value
-        const int ICU_ULOC_FULLNAME_CAPACITY = 157;           // max size of locale name
-        const string ICU_COLLATION_KEYWORD = "@collation=";
+        private const int ICU_ULOC_KEYWORD_AND_VALUES_CAPACITY = 100; // max size of keyword or value
+        private const int ICU_ULOC_FULLNAME_CAPACITY = 157;           // max size of locale name
+        private const string ICU_COLLATION_KEYWORD = "@collation=";
 
         /// <summary>
         /// This method uses the sRealName field (which is initialized by the constructor before this is called) to
@@ -264,6 +264,19 @@ namespace System.Globalization
             {
                 switch (icuFormatString[i])
                 {
+                    case '\'':
+                        result[resultPos++] = icuFormatString[i++];
+                        while (i < icuFormatString.Length)
+                        {
+                            char current = icuFormatString[i++];
+                            result[resultPos++] = current;
+                            if (current == '\'')
+                            {
+                                break;
+                            }
+                        }
+                        break;
+
                     case ':':
                     case '.':
                     case 'H':
@@ -405,8 +418,6 @@ namespace System.Globalization
         {
             return LocaleData.GetConsoleUICulture(cultureName);
         }
-
-        internal bool IsFramework => false;
 
         internal bool IsWin32Installed => false;
 

@@ -155,6 +155,9 @@ typedef struct {
 	int kind;
 	MonoContext ctx; /* valid if kind == DEBUGGER_INVOKE || kind == INTERP_EXIT_WITH_CTX */
 	gpointer interp_exit_data; /* valid if kind == INTERP_EXIT || kind == INTERP_EXIT_WITH_CTX */
+#if defined (_MSC_VER)
+	gboolean interp_exit_label_set;
+#endif
 } MonoLMFExt;
 
 typedef void (*MonoFtnPtrEHCallback) (guint32 gchandle);
@@ -182,6 +185,10 @@ typedef struct MonoDebugOptions {
 	 * Enable this to debug problems with direct calls in llvm
 	 */
 	gboolean llvm_disable_self_init;
+	/*
+	 * Prevent LLVM from inlining any methods
+	 */
+	gboolean llvm_disable_inlining;
 	gboolean use_fallback_tls;
 	/*
 	 * Whenever data such as next sequence points and flags is required.
@@ -236,6 +243,11 @@ typedef struct MonoDebugOptions {
 
 	// Internal testing feature.
 	gboolean test_tailcall_require;
+
+	/*
+	 * Don't enforce any memory model. We will assume the architecture's memory model.
+	 */
+	gboolean weak_memory_model;
 
 	/*
 	 * Internal testing feature
@@ -317,14 +329,11 @@ struct MonoJumpInfo {
 
 	MonoJumpInfoType type;
 	union {
+		// In order to allow blindly using target in mono_add_patch_info,
+		// all fields must be pointer-sized. No ints, no untyped enums.
 		gconstpointer   target;
-#if TARGET_SIZEOF_VOID_P == 8
-		gint64          offset;
-#else
-		int             offset;
-#endif
-		int index;
-		guint uindex;
+		gssize		index;	// only 32 bits used but widened per above
+		gsize		uindex;	// only 32 bits used but widened per above
 		MonoBasicBlock *bb;
 		MonoInst       *inst;
 		MonoMethod     *method;
@@ -333,6 +342,11 @@ struct MonoJumpInfo {
 		MonoImage      *image;
 		MonoVTable     *vtable;
 		const char     *name;
+#ifdef __cplusplus // MonoJitICallId has base type of gsize to widen per above.
+		MonoJitICallId jit_icall_id;
+#else
+		gsize jit_icall_id;	// only 9 bits used but widened per above
+#endif
 		MonoJumpInfoToken  *token;
 		MonoJumpInfoBBTable *table;
 		MonoJumpInfoRgctxEntry *rgctx_entry;
@@ -355,7 +369,10 @@ MONO_API_DATA const char *mono_build_date;
 extern gboolean mono_do_signal_chaining;
 extern gboolean mono_do_crash_chaining;
 MONO_API_DATA gboolean mono_use_llvm;
+MONO_API_DATA gboolean mono_use_fast_math;
 MONO_API_DATA gboolean mono_use_interpreter;
+MONO_API_DATA MonoCPUFeatures mono_cpu_features_enabled;
+MONO_API_DATA MonoCPUFeatures mono_cpu_features_disabled;
 extern const char* mono_interp_opts_string;
 extern gboolean mono_do_single_method_regression;
 extern guint32 mono_single_method_regression_opt;
@@ -410,8 +427,12 @@ MONO_API int         mono_regression_test_step      (int verbose_level, const ch
 
 
 void                   mono_interp_stub_init         (void);
-void                   mini_install_interp_callbacks (MonoEECallbacks *cbs);
-MonoEECallbacks*       mini_get_interp_callbacks     (void);
+void                   mini_install_interp_callbacks (const MonoEECallbacks *cbs);
+
+extern const
+MonoEECallbacks*       mono_interp_callbacks_pointer;
+
+#define mini_get_interp_callbacks() (mono_interp_callbacks_pointer)
 
 typedef struct _MonoDebuggerCallbacks MonoDebuggerCallbacks;
 
@@ -442,15 +463,13 @@ void      mono_push_lmf                     (MonoLMFExt *ext);
 void      mono_pop_lmf                      (MonoLMF *lmf);
 #define mono_get_jit_tls mono_tls_get_jit_tls
 MonoJitTlsData* mono_get_jit_tls            (void);
-MONO_API MONO_RT_EXTERNAL_ONLY
-MonoDomain* mono_jit_thread_attach (MonoDomain *domain);
 MONO_API void      mono_jit_set_domain      (MonoDomain *domain);
 
 gboolean  mono_method_same_domain           (MonoJitInfo *caller, MonoJitInfo *callee);
 gpointer  mono_create_ftnptr                (MonoDomain *domain, gpointer addr);
 MonoMethod* mono_icall_get_wrapper_method    (MonoJitICallInfo* callinfo) MONO_LLVM_INTERNAL;
 gconstpointer     mono_icall_get_wrapper       (MonoJitICallInfo* callinfo) MONO_LLVM_INTERNAL;
-gconstpointer     mono_icall_get_wrapper_full  (MonoJitICallInfo* callinfo, gboolean do_compile);
+gconstpointer     mono_icall_get_wrapper_full  (MonoJitICallInfo* callinfo, gboolean do_compile) MONO_LLVM_INTERNAL;
 
 MonoJumpInfo* mono_patch_info_dup_mp        (MonoMemPool *mp, MonoJumpInfo *patch_info);
 guint     mono_patch_info_hash (gconstpointer data) MONO_LLVM_INTERNAL;
@@ -461,10 +480,11 @@ MonoJumpInfoToken* mono_jump_info_token_new2 (MonoMemPool *mp, MonoImage *image,
 gpointer  mono_resolve_patch_target         (MonoMethod *method, MonoDomain *domain, guint8 *code, MonoJumpInfo *patch_info, gboolean run_cctors, MonoError *error) MONO_LLVM_INTERNAL;
 void mini_register_jump_site                (MonoDomain *domain, MonoMethod *method, gpointer ip);
 void mini_patch_jump_sites                  (MonoDomain *domain, MonoMethod *method, gpointer addr);
+void mini_patch_llvm_jit_callees            (MonoDomain *domain, MonoMethod *method, gpointer addr);
 gpointer  mono_jit_search_all_backends_for_jit_info (MonoDomain *domain, MonoMethod *method, MonoJitInfo **ji);
 gpointer  mono_jit_find_compiled_method_with_jit_info (MonoDomain *domain, MonoMethod *method, MonoJitInfo **ji);
 gpointer  mono_jit_find_compiled_method     (MonoDomain *domain, MonoMethod *method);
-gpointer  mono_jit_compile_method           (MonoMethod *method, MonoError *error);
+gpointer  mono_jit_compile_method           (MonoMethod *method, MonoError *error) MONO_LLVM_INTERNAL;
 gpointer  mono_jit_compile_method_jit_only  (MonoMethod *method, MonoError *error);
 
 void      mono_set_bisect_methods          (guint32 opt, const char *method_list_filename);

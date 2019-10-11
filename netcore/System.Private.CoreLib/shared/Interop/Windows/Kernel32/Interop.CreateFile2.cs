@@ -7,9 +7,9 @@ using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
 
-internal partial class Interop
+internal static partial class Interop
 {
-    internal partial class Kernel32
+    internal static partial class Kernel32
     {
         [DllImport(Libraries.Kernel32, EntryPoint = "CreateFile2", SetLastError = true, CharSet = CharSet.Unicode)]
         private static extern SafeFileHandle CreateFile2Private(
@@ -26,9 +26,8 @@ internal partial class Interop
             FileMode dwCreationDisposition,
             ref Kernel32.CREATEFILE2_EXTENDED_PARAMETERS pCreateExParams)
         {
-            string? lpFileNameWithPrefix = PathInternal.EnsureExtendedPrefixIfNeeded(lpFileName);
-            Debug.Assert(lpFileNameWithPrefix != null, "null not expected when non-null passed"); // TODO-NULLABLE: https://github.com/dotnet/roslyn/issues/26761
-            return CreateFile2Private(lpFileNameWithPrefix, dwDesiredAccess, dwShareMode, dwCreationDisposition, ref pCreateExParams);
+            lpFileName = PathInternal.EnsureExtendedPrefixIfNeeded(lpFileName);
+            return CreateFile2Private(lpFileName, dwDesiredAccess, dwShareMode, dwCreationDisposition, ref pCreateExParams);
         }
     }
 }

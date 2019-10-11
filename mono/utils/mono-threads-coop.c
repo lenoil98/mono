@@ -310,6 +310,11 @@ mono_threads_enter_gc_safe_region_unbalanced_with_info (MonoThreadInfo *info, Mo
 
 	check_info (info, "enter", "safe", function_name);
 
+	// NOTE, copy_stack_data needs to be done. One problem it solves is optimization taking place between stackdata snapshot and
+	// thread_state_init, storing changed register(s) on stack and if those register(s) include managed references
+	// (that are not previously stored anywhere on the stack), then GC won't detect that reference(s). Storing the stack
+	// and registers into a separate location makes sure we still see any registers temporary stored on stack due to optimizations
+	// done between stackdata snapshot and thread_state_init.
 	copy_stack_data (info, stackdata);
 
 retry:
@@ -636,26 +641,31 @@ threads_suspend_policy_getenv (void)
 	return policy;
 }
 
-static char threads_suspend_policy;
+char mono_threads_suspend_policy_hidden_dont_modify;
 
-MonoThreadsSuspendPolicy
-mono_threads_suspend_policy (void)
+void
+mono_threads_suspend_policy_init (void)
 {
-	int policy = threads_suspend_policy;
-	if (G_UNLIKELY (policy == 0)) {
+	int policy = 0;
+	{
 		// thread suspend policy:
 		// if the MONO_THREADS_SUSPEND env is set, use it.
 		// otherwise if there's a compiled-in default, use it.
 		// otherwise if one of the old environment variables is set, use that.
 		// otherwise use full preemptive suspend.
+
+		W32_DEFINE_LAST_ERROR_RESTORE_POINT;
+
 		   (policy = threads_suspend_policy_getenv ())
 		|| (policy = threads_suspend_policy_default ())
 		|| (policy = threads_suspend_policy_getenv_compat ())
 		|| (policy = MONO_THREADS_SUSPEND_FULL_PREEMPTIVE);
+
+		W32_RESTORE_LAST_ERROR_FROM_RESTORE_POINT;
+
 		g_assert (policy);
-		threads_suspend_policy = (char)policy;
+		mono_threads_suspend_policy_hidden_dont_modify = (char)policy;
 	}
-	return (MonoThreadsSuspendPolicy)policy;
 }
 
 static MonoThreadsSuspendPolicy
@@ -681,7 +691,7 @@ mono_threads_suspend_validate_policy (MonoThreadsSuspendPolicy policy)
 void
 mono_threads_suspend_override_policy (MonoThreadsSuspendPolicy new_policy)
 {
-	threads_suspend_policy = (char)mono_threads_suspend_validate_policy (new_policy);
+	mono_threads_suspend_policy_hidden_dont_modify = (char)mono_threads_suspend_validate_policy (new_policy);
 	g_warning ("Overriding suspend policy.  Using %s suspend.", mono_threads_suspend_policy_name (mono_threads_suspend_policy ()));
 }
 
@@ -756,4 +766,31 @@ mono_threads_exit_no_safepoints_region (const char *func)
 {
 	MONO_REQ_GC_UNSAFE_MODE;
 	mono_threads_transition_end_no_safepoints (mono_thread_info_current (), func);
+}
+
+void
+mono_thread_set_coop_aware (void)
+{
+	MONO_ENTER_GC_UNSAFE;
+	MonoThreadInfo *info = mono_thread_info_current_unchecked ();
+	if (info)
+		/* NOTE, this flag should only be changed while in unsafe mode. */
+		/* It will make sure we won't get an async preemptive suspend */
+		/* request against this thread while in the process of changing the flag */
+		/* affecting the threads suspend/resume behavior. */
+		mono_atomic_store_i32 (&(info->coop_aware_thread), TRUE);
+	MONO_EXIT_GC_UNSAFE;
+}
+
+mono_bool
+mono_thread_get_coop_aware (void)
+{
+	mono_bool result = FALSE;
+	MONO_ENTER_GC_UNSAFE;
+	MonoThreadInfo *info = mono_thread_info_current_unchecked ();
+	if (info)
+		result = (mono_bool)mono_atomic_load_i32 (&(info->coop_aware_thread));
+	MONO_EXIT_GC_UNSAFE;
+
+	return result;
 }

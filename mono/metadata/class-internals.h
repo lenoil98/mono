@@ -14,6 +14,7 @@
 #include "mono/utils/mono-compiler.h"
 #include "mono/utils/mono-error.h"
 #include "mono/sgen/gc-internal-agnostic.h"
+#include "mono/utils/mono-error-internals.h"
 
 #define MONO_CLASS_IS_ARRAY(c) (m_class_get_rank (c))
 
@@ -23,6 +24,7 @@
 
 extern gboolean mono_print_vtable;
 extern gboolean mono_align_small_structs;
+extern gint32 mono_simd_register_size;
 
 typedef struct _MonoMethodWrapper MonoMethodWrapper;
 typedef struct _MonoMethodInflated MonoMethodInflated;
@@ -78,6 +80,7 @@ struct _MonoMethod {
 	unsigned int is_inflated:1; /* whether we're a MonoMethodInflated */
 	unsigned int skip_visibility:1; /* whenever to skip JIT visibility checks */
 	unsigned int verification_success:1; /* whether this method has been verified successfully.*/
+	unsigned int is_reabstracted:1; /* whenever this is a reabstraction of another interface */
 	signed int slot : 16;
 
 	/*
@@ -248,7 +251,7 @@ typedef enum {
 	MONO_CLASS_GINST, /* generic instantiation */
 	MONO_CLASS_GPARAM, /* generic parameter */
 	MONO_CLASS_ARRAY, /* vector or array, bounded or not */
-	MONO_CLASS_POINTER, /* pointer of function pointer*/
+	MONO_CLASS_POINTER, /* pointer or function pointer*/
 } MonoTypeKind;
 
 typedef struct _MonoClassDef MonoClassDef;
@@ -576,6 +579,9 @@ typedef struct MonoCachedClassInfo {
 } MonoCachedClassInfo;
 
 typedef struct {
+	// Name and func fields double as "inited".
+	// That is, any initialized MonoJitICallInfo must
+	// have both of them to be non-NULL.
 	const char *name;
 	gconstpointer func;
 	gconstpointer wrapper;
@@ -583,7 +589,6 @@ typedef struct {
 	MonoMethodSignature *sig;
 	const char *c_symbol;
 	MonoMethod *wrapper_method;
-	gboolean inited;
 } MonoJitICallInfo;
 
 void
@@ -815,6 +820,9 @@ mono_class_has_special_static_fields (MonoClass *klass);
 const char*
 mono_class_get_field_default_value (MonoClassField *field, MonoTypeEnum *def_type);
 
+MonoProperty* 
+mono_class_get_property_from_name_internal (MonoClass *klass, const char *name);
+
 const char*
 mono_class_get_property_default_value (MonoProperty *property, MonoTypeEnum *def_type);
 
@@ -840,10 +848,34 @@ MONO_PROFILER_API MonoGenericContext*
 mono_class_get_context (MonoClass *klass);
 
 MONO_PROFILER_API MonoMethodSignature*
-mono_method_signature_checked (MonoMethod *m, MonoError *err);
+mono_method_signature_checked_slow (MonoMethod *m, MonoError *err);
 
 MONO_PROFILER_API MonoMethodSignature*
-mono_method_signature_internal (MonoMethod *m);
+mono_method_signature_internal_slow (MonoMethod *m);
+
+/**
+ * mono_method_signature_checked:
+ *
+ * Return the signature of the method M. On failure, returns NULL, and ERR is set.
+ */
+static inline MonoMethodSignature*
+mono_method_signature_checked (MonoMethod *m, MonoError *error)
+{
+	error_init (error);
+	MonoMethodSignature* sig = m->signature;
+	return sig ? sig : mono_method_signature_checked_slow (m, error);
+}
+
+/**
+ * mono_method_signature_internal:
+ * \returns the signature of the method \p m. On failure, returns NULL.
+ */
+static inline MonoMethodSignature*
+mono_method_signature_internal (MonoMethod *m)
+{
+	MonoMethodSignature* sig = m->signature;
+	return sig ? sig : mono_method_signature_internal_slow (m);
+}
 
 MonoGenericContext*
 mono_method_get_context_general (MonoMethod *method, gboolean uninflated);
@@ -1017,6 +1049,11 @@ GENERATE_TRY_GET_CLASS_WITH_CACHE_DECL (appdomain_unloaded_exception)
 GENERATE_GET_CLASS_WITH_CACHE_DECL (valuetype)
 
 GENERATE_TRY_GET_CLASS_WITH_CACHE_DECL(handleref)
+
+#ifdef ENABLE_NETCORE
+GENERATE_GET_CLASS_WITH_CACHE_DECL (assembly_load_context)
+#endif
+
 /* If you need a MonoType, use one of the mono_get_*_type () functions in class-inlines.h */
 extern MonoDefaults mono_defaults;
 
@@ -1068,84 +1105,31 @@ MONO_API gboolean
 mono_metadata_load_generic_param_constraints_checked (MonoImage *image, guint32 token,
 					      MonoGenericContainer *container, MonoError *error);
 
-// Tbis is the "real" function for registering JIT icalls. All others are one line wrappers that call it,
-// such as with info=NULL and/or c_symbol=NULL. info=NULL is temporary. c_symbols is convenience
-// but consider being explicit.
-MonoJitICallInfo *
+// This is the "real" function for registering JIT icalls. All others are one line wrappers that call it,
+// i.e. filling in info or c_symbol.
+void
 mono_register_jit_icall_info (MonoJitICallInfo *info, gconstpointer func, const char *name,
 			      MonoMethodSignature *sig, gboolean no_wrapper, const char *c_symbol);
 
-// Register JIT icall w/o info w/o c_symbol; temporary.
-static inline
-MonoJitICallInfo *
-mono_register_jit_icall (gconstpointer func, const char *name, MonoMethodSignature *sig, gboolean is_save)
-{
-	// full means with c_symbol, else c_symbol == NULL
-	return mono_register_jit_icall_info (NULL, func, name, sig, is_save, NULL);
-}
-
-// Register JIT icall w/o info w/ c_symbol; temporary.
-static inline
-MonoJitICallInfo *
-mono_register_jit_icall_full (gconstpointer func, const char *name, MonoMethodSignature *sig, gboolean no_wrapper, const char *c_symbol)
-{
-	// full means with c_symbol, else c_symbol == NULL
-	return mono_register_jit_icall_info (NULL, func, name, sig, no_wrapper, c_symbol);
-}
-
-#ifdef __cplusplus
-
-// template register JIT icall w/o info w/o c_symbol; temporary.
-template <typename T>
-inline MonoJitICallInfo *
-mono_register_jit_icall (T func, const char *name, MonoMethodSignature *sig, gboolean is_save)
-{
-	// full means with c_symbol, else c_symbol == NULL
-	return mono_register_jit_icall_info (NULL, (gconstpointer)func, name, sig, is_save, NULL);
-}
-
-// template register JIT icall w/o info w/ c_symbol; temporary.
-template <typename T>
-inline MonoJitICallInfo *
-mono_register_jit_icall_full (T func, const char *name, MonoMethodSignature *sig, gboolean no_wrapper, const char *c_symbol)
-{
-	// full means with c_symbol, else c_symbol == NULL
-	return mono_register_jit_icall_info (NULL, (gconstpointer)func, name, sig, no_wrapper, c_symbol);
-}
-#endif // __cplusplus
-
 #ifdef __cplusplus
 template <typename T>
-inline MonoJitICallInfo *
+inline void
 mono_register_jit_icall_info (MonoJitICallInfo *info, T func, const char *name, MonoMethodSignature *sig, gboolean no_wrapper, const char *c_symbol)
 {
-	// full means with c_symbol, else c_symbol == NULL
-	return mono_register_jit_icall_info (info, (gconstpointer)func, name, sig, no_wrapper, c_symbol);
+	mono_register_jit_icall_info (info, (gconstpointer)func, name, sig, no_wrapper, c_symbol);
 }
 #endif // __cplusplus
 
-// Temporarily two sets of JIT icall registration functions until conversion done. i.e. w/ and w/o info.
-
-void
-mono_register_jit_icall_wrapper (MonoJitICallInfo *info, gconstpointer wrapper);
-
-MonoJitICallInfo *
-mono_find_jit_icall_by_name (const char *name) MONO_LLVM_INTERNAL;
-
-MonoJitICallInfo *
-mono_find_jit_icall_by_addr (gconstpointer addr) MONO_LLVM_INTERNAL;
-
-GHashTable*
-mono_get_jit_icall_info (void);
-
-const char*
-mono_lookup_jit_icall_symbol (const char *name);
+#define mono_register_jit_icall(func, sig, no_wrapper) (mono_register_jit_icall_info (&mono_get_jit_icall_info ()->func, func, #func, (sig), (no_wrapper), NULL))
 
 gboolean
 mono_class_set_type_load_failure (MonoClass *klass, const char * fmt, ...) MONO_ATTR_FORMAT_PRINTF(2,3);
 
 MonoException*
 mono_class_get_exception_for_failure (MonoClass *klass);
+
+char*
+mono_identifier_escape_type_name_chars (const char* identifier);
 
 char*
 mono_type_get_name_full (MonoType *type, MonoTypeNameFormat format);
@@ -1262,6 +1246,9 @@ mono_class_has_variant_generic_params (MonoClass *klass);
 
 gboolean
 mono_class_is_variant_compatible (MonoClass *klass, MonoClass *oklass, gboolean check_for_reference_conv);
+
+gboolean 
+mono_class_is_subclass_of_internal (MonoClass *klass, MonoClass *klassc, gboolean check_interfaces);
 
 mono_bool
 mono_class_is_assignable_from_internal (MonoClass *klass, MonoClass *oklass);
@@ -1504,7 +1491,7 @@ gboolean
 mono_class_init_checked (MonoClass *klass, MonoError *error);
 
 MonoType*
-mono_class_enum_basetype_internal (MonoClass *klass);
+mono_class_enum_basetype_internal (MonoClass *klass) MONO_LLVM_INTERNAL;
 
 // Enum and static storage for JIT icalls.
 #include "jit-icall-reg.h"

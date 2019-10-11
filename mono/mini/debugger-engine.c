@@ -259,7 +259,7 @@ remove_breakpoint (BreakpointInstance *inst)
 /*
  * This doesn't take any locks.
  */
-static inline gboolean
+static gboolean
 bp_matches_method (MonoBreakpoint *bp, MonoMethod *method)
 {
 	int i;
@@ -351,13 +351,12 @@ mono_de_add_pending_breakpoints (MonoMethod *method, MonoJitInfo *ji)
 static void
 set_bp_in_method (MonoDomain *domain, MonoMethod *method, MonoSeqPointInfo *seq_points, MonoBreakpoint *bp, MonoError *error)
 {
-	gpointer code;
 	MonoJitInfo *ji;
 
 	if (error)
 		error_init (error);
 
-	code = mono_jit_search_all_backends_for_jit_info (domain, method, &ji);
+	(void)mono_jit_search_all_backends_for_jit_info (domain, method, &ji);
 	g_assert (ji);
 
 	insert_breakpoint (seq_points, domain, ji, bp, error);
@@ -467,7 +466,7 @@ mono_de_set_breakpoint (MonoMethod *method, long il_offset, EventRequest *req, M
 	g_ptr_array_free (method_domains, TRUE);
 	g_ptr_array_free (method_seq_points, TRUE);
 
-	if (error && !mono_error_ok (error)) {
+	if (error && !is_ok (error)) {
 		mono_de_clear_breakpoint (bp);
 		return NULL;
 	}
@@ -1277,6 +1276,10 @@ mono_de_ss_start (SingleStepReq *ss_req, SingleStepArgs *ss_args)
 	DbgEngineStackFrame **frames = ss_args->frames;
 	int nframes = ss_args->nframes;
 	SeqPoint *sp = &ss_args->sp;
+
+	/* this can happen on a single step in a exception on android (Mono_UnhandledException_internal) and on IOS */
+	if (!method)
+		return;
 
 	/*
 	 * Implement single stepping using breakpoints if possible.

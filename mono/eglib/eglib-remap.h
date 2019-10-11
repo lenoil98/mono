@@ -16,6 +16,7 @@
 #define g_array_set_size monoeg_g_array_set_size
 #define g_array_sized_new monoeg_g_array_sized_new
 #define g_ascii_strdown monoeg_g_ascii_strdown
+#define g_ascii_strdown_no_alloc monoeg_g_ascii_strdown_no_alloc
 #define g_ascii_strncasecmp monoeg_g_ascii_strncasecmp
 #define g_ascii_tolower monoeg_g_ascii_tolower
 #define g_ascii_xdigit_value monoeg_g_ascii_xdigit_value
@@ -133,6 +134,7 @@
 #define g_pattern_match_string monoeg_g_pattern_match_string
 #define g_pattern_spec_free monoeg_g_pattern_spec_free
 #define g_pattern_spec_new monoeg_g_pattern_spec_new
+#define g_async_safe_fgets monoeg_g_async_safe_fgets
 #define g_async_safe_fprintf monoeg_g_async_safe_fprintf
 #define g_async_safe_vfprintf monoeg_g_async_safe_vfprintf
 #define g_async_safe_printf monoeg_g_async_safe_printf
@@ -231,6 +233,7 @@
 #define g_strlcpy monoeg_g_strlcpy
 #define g_strndup monoeg_g_strndup
 #define g_strnfill monoeg_g_strnfill
+#define g_strnlen monoeg_g_strnlen
 #define g_strreverse monoeg_g_strreverse
 #define g_strsplit monoeg_g_strsplit
 #define g_strsplit_set monoeg_g_strsplit_set

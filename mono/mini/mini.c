@@ -99,9 +99,8 @@ static guint32 jinfo_try_holes_size;
 #define mono_jit_unlock() mono_os_mutex_unlock (&jit_mutex)
 static mono_mutex_t jit_mutex;
 
-static MonoBackend *current_backend;
-
 #ifndef DISABLE_JIT
+static MonoBackend *current_backend;
 
 gpointer
 mono_realloc_native_code (MonoCompile *cfg)
@@ -999,12 +998,12 @@ mini_method_verify (MonoCompile *cfg, MonoMethod *method, gboolean fail_compile)
 					char *msg = g_strdup_printf ("Error verifying %s: %s", method_name, info->info.message);
 
 					if (info->exception_type == MONO_EXCEPTION_METHOD_ACCESS)
-						mono_error_set_generic_error (&cfg->error, "System", "MethodAccessException", "%s", msg);
+						mono_error_set_generic_error (cfg->error, "System", "MethodAccessException", "%s", msg);
 					else if (info->exception_type == MONO_EXCEPTION_FIELD_ACCESS)
-						mono_error_set_generic_error (&cfg->error, "System", "FieldAccessException", "%s", msg);
+						mono_error_set_generic_error (cfg->error, "System", "FieldAccessException", "%s", msg);
 					else if (info->exception_type == MONO_EXCEPTION_UNVERIFIABLE_IL)
-						mono_error_set_generic_error (&cfg->error, "System.Security", "VerificationException", "%s", msg);
-					if (!mono_error_ok (&cfg->error)) {
+						mono_error_set_generic_error (cfg->error, "System.Security", "VerificationException", "%s", msg);
+					if (!is_ok (cfg->error)) {
 						mono_cfg_set_exception (cfg, MONO_EXCEPTION_MONO_ERROR);
 						g_free (msg);
 					} else {
@@ -2089,27 +2088,17 @@ mono_postprocess_patches (MonoCompile *cfg)
 	for (patch_info = cfg->patch_info; patch_info; patch_info = patch_info->next) {
 		switch (patch_info->type) {
 		case MONO_PATCH_INFO_ABS: {
-			MonoJitICallInfo *info = mono_find_jit_icall_by_addr (patch_info->data.target);
-
 			/*
-			 * Change patches of type MONO_PATCH_INFO_ABS into patches describing the 
+			 * Change patches of type MONO_PATCH_INFO_ABS into patches describing the
 			 * absolute address.
 			 */
-			if (info) {
-				patch_info->type = MONO_PATCH_INFO_JIT_ICALL;
-				patch_info->data.name = info->name;
-			}
-
-			if (patch_info->type == MONO_PATCH_INFO_ABS) {
-				if (cfg->abs_patches) {
-					MonoJumpInfo *abs_ji = (MonoJumpInfo *)g_hash_table_lookup (cfg->abs_patches, patch_info->data.target);
-					if (abs_ji) {
-						patch_info->type = abs_ji->type;
-						patch_info->data.target = abs_ji->data.target;
-					}
+			if (cfg->abs_patches) {
+				MonoJumpInfo *abs_ji = (MonoJumpInfo *)g_hash_table_lookup (cfg->abs_patches, patch_info->data.target);
+				if (abs_ji) {
+					patch_info->type = abs_ji->type;
+					patch_info->data.target = abs_ji->data.target;
 				}
 			}
-
 			break;
 		}
 		case MONO_PATCH_INFO_SWITCH: {
@@ -2132,6 +2121,21 @@ mono_postprocess_patches (MonoCompile *cfg)
 			patch_info->data.table->table = (MonoBasicBlock**)table;
 			break;
 		}
+		default:
+			/* do nothing */
+			break;
+		}
+	}
+}
+
+/* Those patches require the JitInfo of the compiled method already be in place when used */
+static void
+mono_postprocess_patches_after_ji_publish (MonoCompile *cfg)
+{
+	MonoJumpInfo *patch_info;
+
+	for (patch_info = cfg->patch_info; patch_info; patch_info = patch_info->next) {
+		switch (patch_info->type) {
 		case MONO_PATCH_INFO_METHOD_JUMP: {
 			unsigned char *ip = cfg->native_code + patch_info->ip.i;
 
@@ -2311,8 +2315,8 @@ mono_codegen (MonoCompile *cfg)
 			if (ji->type == MONO_PATCH_INFO_NONE)
 				continue;
 
-			target = mono_resolve_patch_target (cfg->method, cfg->domain, cfg->native_code, ji, cfg->run_cctors, &cfg->error);
-			if (!mono_error_ok (&cfg->error)) {
+			target = mono_resolve_patch_target (cfg->method, cfg->domain, cfg->native_code, ji, cfg->run_cctors, cfg->error);
+			if (!is_ok (cfg->error)) {
 				mono_cfg_set_exception (cfg, MONO_EXCEPTION_MONO_ERROR);
 				return;
 			}
@@ -2320,8 +2324,8 @@ mono_codegen (MonoCompile *cfg)
 		}
 	}
 #else
-	mono_arch_patch_code (cfg, cfg->method, cfg->domain, cfg->native_code, cfg->patch_info, cfg->run_cctors, &cfg->error);
-	if (!is_ok (&cfg->error)) {
+	mono_arch_patch_code (cfg, cfg->method, cfg->domain, cfg->native_code, cfg->patch_info, cfg->run_cctors, cfg->error);
+	if (!is_ok (cfg->error)) {
 		mono_cfg_set_exception (cfg, MONO_EXCEPTION_MONO_ERROR);
 		return;
 	}
@@ -2876,9 +2880,9 @@ insert_safepoints (MonoCompile *cfg)
 		WrapperInfo *info = mono_marshal_get_wrapper_info (cfg->method);
 		/* These wrappers are called from the wrapper for the polling function, leading to potential stack overflow */
 		if (info && info->subtype == WRAPPER_SUBTYPE_ICALL_WRAPPER &&
-				(info->d.icall.func == mono_threads_state_poll ||
-				 info->d.icall.func == mono_thread_interruption_checkpoint ||
-				 info->d.icall.func == mono_threads_exit_gc_safe_region_unbalanced)) {
+				(info->d.icall.jit_icall_id == MONO_JIT_ICALL_mono_threads_state_poll ||
+				 info->d.icall.jit_icall_id == MONO_JIT_ICALL_mono_thread_interruption_checkpoint ||
+				 info->d.icall.jit_icall_id == MONO_JIT_ICALL_mono_threads_exit_gc_safe_region_unbalanced)) {
 			if (cfg->verbose_level > 1)
 				printf ("SKIPPING SAFEPOINTS for the polling function icall\n");
 			return;
@@ -3156,15 +3160,9 @@ mini_method_compile (MonoMethod *method, guint32 opts, MonoDomain *domain, JitFl
 	cfg->gen_sdb_seq_points = mini_debug_options.gen_sdb_seq_points;
 	cfg->llvm_only = (flags & JIT_FLAG_LLVM_ONLY) != 0;
 	cfg->interp = (flags & JIT_FLAG_INTERP) != 0;
+	cfg->use_current_cpu = (flags & JIT_FLAG_USE_CURRENT_CPU) != 0;
 	cfg->backend = current_backend;
 
-#ifdef HOST_ANDROID
-	if (cfg->method->wrapper_type != MONO_WRAPPER_NONE) {
-		/* FIXME: Why is this needed */
-		cfg->gen_seq_points = FALSE;
-		cfg->gen_sdb_seq_points = FALSE;
-	}
-#endif
 	if (cfg->method->wrapper_type == MONO_WRAPPER_ALLOC) {
 		/* We can't have seq points inside gc critical regions */
 		cfg->gen_seq_points = FALSE;
@@ -3201,7 +3199,8 @@ mini_method_compile (MonoMethod *method, guint32 opts, MonoDomain *domain, JitFl
 
 	if (cfg->gen_seq_points)
 		cfg->seq_points = g_ptr_array_new ();
-	error_init (&cfg->error);
+	cfg->error = (MonoError*)&cfg->error_value;
+	error_init (cfg->error);
 
 	if (cfg->compile_aot && !try_generic_shared && (method->is_generic || mono_class_is_gtd (method->klass) || method_is_gshared)) {
 		cfg->exception_type = MONO_EXCEPTION_GENERIC_SHARING_FAILED;
@@ -3254,7 +3253,7 @@ mini_method_compile (MonoMethod *method, guint32 opts, MonoDomain *domain, JitFl
 		return cfg;
 	}
 
-	header = cfg->header = mono_method_get_header_checked (cfg->method, &cfg->error);
+	header = cfg->header = mono_method_get_header_checked (cfg->method, cfg->error);
 	if (!header) {
 		mono_cfg_set_exception (cfg, MONO_EXCEPTION_MONO_ERROR);
 		if (MONO_METHOD_COMPILE_END_ENABLED ())
@@ -3431,7 +3430,7 @@ mini_method_compile (MonoMethod *method, guint32 opts, MonoDomain *domain, JitFl
 
 	/*We must verify the method before doing any IR generation as mono_compile_create_vars can assert.*/
 	if (mono_compile_is_broken (cfg, cfg->method, TRUE)) {
-		if (mini_get_debug_options ()->break_on_unverified)
+		if (mini_debug_options.break_on_unverified)
 			G_BREAKPOINT ();
 		return cfg;
 	}
@@ -3871,8 +3870,10 @@ mini_method_compile (MonoMethod *method, guint32 opts, MonoDomain *domain, JitFl
 	}
 
 	if (cfg->verbose_level >= 2) {
-		char *id =  mono_method_full_name (cfg->method, FALSE);
+		char *id =  mono_method_full_name (cfg->method, TRUE);
+		g_print ("\n*** ASM for %s ***\n", id);
 		mono_disassemble_code (cfg, cfg->native_code, cfg->code_len, id + 3);
+		g_print ("***\n\n");
 		g_free (id);
 	}
 
@@ -3882,6 +3883,9 @@ mini_method_compile (MonoMethod *method, guint32 opts, MonoDomain *domain, JitFl
 
 		if (cfg->method->dynamic)
 			mono_dynamic_code_hash_lookup (cfg->domain, cfg->method)->ji = cfg->jit_info;
+
+		mono_postprocess_patches_after_ji_publish (cfg);
+
 		mono_domain_unlock (cfg->domain);
 	}
 
@@ -3973,7 +3977,7 @@ void
 mono_cfg_set_exception_invalid_program (MonoCompile *cfg, char *msg)
 {
 	mono_cfg_set_exception (cfg, MONO_EXCEPTION_MONO_ERROR);
-	mono_error_set_generic_error (&cfg->error, "System", "InvalidProgramException", "%s", msg);
+	mono_error_set_generic_error (cfg->error, "System", "InvalidProgramException", "%s", msg);
 }
 
 #endif /* DISABLE_JIT */
@@ -4071,8 +4075,8 @@ mono_jit_compile_method_inner (MonoMethod *method, MonoDomain *target_domain, in
 	}
 	case MONO_EXCEPTION_MONO_ERROR:
 		// FIXME: MonoError has no copy ctor
-		g_assert (!mono_error_ok (&cfg->error));
-		ex = mono_error_convert_to_exception (&cfg->error);
+		g_assert (!is_ok (cfg->error));
+		ex = mono_error_convert_to_exception (cfg->error);
 		break;
 	default:
 		g_assert_not_reached ();
@@ -4136,24 +4140,13 @@ mono_jit_compile_method_inner (MonoMethod *method, MonoDomain *target_domain, in
 
 	mono_destroy_compile (cfg);
 
+	mini_patch_llvm_jit_callees (target_domain, method, code);
 #ifndef DISABLE_JIT
-	/* Update llvm callees */
-	if (domain_jit_info (target_domain)->llvm_jit_callees) {
-		GSList *callees = (GSList*)g_hash_table_lookup (domain_jit_info (target_domain)->llvm_jit_callees, method);
-		GSList *l;
-
-		for (l = callees; l; l = l->next) {
-			gpointer *addr = (gpointer*)l->data;
-
-			*addr = code;
-		}
-	}
-
 	mono_emit_jit_map (jinfo);
 #endif
 	mono_domain_unlock (target_domain);
 
-	if (!mono_error_ok (error))
+	if (!is_ok (error))
 		return NULL;
 
 	vtable = mono_class_vtable_checked (target_domain, method->klass, error);

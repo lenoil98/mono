@@ -113,7 +113,7 @@ typedef enum {
 	WRAPPER_SUBTYPE_RUNTIME_INVOKE_DIRECT,
 	WRAPPER_SUBTYPE_RUNTIME_INVOKE_VIRTUAL,
 	/* Subtypes of MONO_WRAPPER_MANAGED_TO_NATIVE */
-	WRAPPER_SUBTYPE_ICALL_WRAPPER,
+	WRAPPER_SUBTYPE_ICALL_WRAPPER, // specifically JIT icalls
 	WRAPPER_SUBTYPE_NATIVE_FUNC_AOT,
 	WRAPPER_SUBTYPE_PINVOKE,
 	/* Subtypes of MONO_WRAPPER_OTHER */
@@ -131,7 +131,8 @@ typedef enum {
 	WRAPPER_SUBTYPE_GSHAREDVT_OUT_SIG,
 	WRAPPER_SUBTYPE_INTERP_IN,
 	WRAPPER_SUBTYPE_INTERP_LMF,
-	WRAPPER_SUBTYPE_AOT_INIT
+	WRAPPER_SUBTYPE_AOT_INIT,
+	WRAPPER_SUBTYPE_LLVM_FUNC
 } WrapperSubtype;
 
 typedef struct {
@@ -174,7 +175,7 @@ typedef struct {
 } GenericArrayHelperWrapperInfo;
 
 typedef struct {
-	gpointer func;
+	MonoJitICallId jit_icall_id;
 } ICallWrapperInfo;
 
 typedef struct {
@@ -224,6 +225,17 @@ typedef struct {
 	MonoAotInitSubtype subtype;
 } AOTInitWrapperInfo;
 
+typedef enum {
+	LLVM_FUNC_WRAPPER_GC_POLL = 0
+} MonoLLVMFuncWrapperSubtype;
+
+typedef struct {
+	// We emit this code when we init the module,
+	// and later match up the native code with this method
+	// using the name.
+	MonoLLVMFuncWrapperSubtype subtype;
+} LLVMFuncWrapperInfo;
+
 /*
  * This structure contains additional information to uniquely identify a given wrapper
  * method. It can be retrieved by mono_marshal_get_wrapper_info () for certain types
@@ -270,6 +282,8 @@ typedef struct {
 		InterpInWrapperInfo interp_in;
 		/* AOT_INIT */
 		AOTInitWrapperInfo aot_init;
+		/* LLVM_FUNC */
+		LLVMFuncWrapperInfo llvm_func;
 	} d;
 } WrapperInfo;
 
@@ -284,7 +298,7 @@ typedef enum {
 } MonoStelemrefKind;
 
 
-#define MONO_MARSHAL_CALLBACKS_VERSION 3
+#define MONO_MARSHAL_CALLBACKS_VERSION 4
 
 typedef struct {
 	int version;
@@ -323,7 +337,7 @@ typedef struct {
 	void (*emit_thunk_invoke_wrapper) (MonoMethodBuilder *mb, MonoMethod *method, MonoMethodSignature *csig);
 	void (*emit_create_string_hack) (MonoMethodBuilder *mb, MonoMethodSignature *csig, MonoMethod *res);
 	void (*emit_native_icall_wrapper) (MonoMethodBuilder *mb, MonoMethod *method, MonoMethodSignature *csig, gboolean check_exceptions, gboolean aot, MonoMethodPInvoke *pinfo);
-	void (*emit_icall_wrapper) (MonoMethodBuilder *mb, MonoMethodSignature *sig, gconstpointer func, MonoMethodSignature *csig2, gboolean check_exceptions);
+	void (*emit_icall_wrapper) (MonoMethodBuilder *mb, MonoJitICallInfo *callinfo, MonoMethodSignature *csig2, gboolean check_exceptions);
 	void (*emit_return) (MonoMethodBuilder *mb);
 	void (*emit_vtfixup_ftnptr) (MonoMethodBuilder *mb, MonoMethod *method, int param_count, guint16 type);
 	void (*mb_skip_visibility) (MonoMethodBuilder *mb);
@@ -375,6 +389,9 @@ mono_marshal_ftnptr_eh_callback (guint32 gchandle);
 
 MONO_PAL_API void
 mono_marshal_set_last_error (void);
+
+void
+mono_marshal_clear_last_error (void);
 
 guint
 mono_type_to_ldind (MonoType *type);
@@ -437,6 +454,9 @@ mono_marshal_get_aot_init_wrapper (MonoAotInitSubtype subtype) MONO_LLVM_INTERNA
 
 const char *
 mono_marshal_get_aot_init_wrapper_name (MonoAotInitSubtype subtype) MONO_LLVM_INTERNAL;
+
+MonoMethod *
+mono_marshal_get_llvm_func_wrapper (MonoLLVMFuncWrapperSubtype subtype) MONO_LLVM_INTERNAL;
 
 MonoMethod *
 mono_marshal_get_native_wrapper (MonoMethod *method, gboolean check_exceptions, gboolean aot);
@@ -581,6 +601,10 @@ guint32
 ves_icall_System_Runtime_InteropServices_Marshal_GetLastWin32Error (void);
 
 ICALL_EXPORT
+void
+ves_icall_System_Runtime_InteropServices_Marshal_SetLastWin32Error (guint32 err);
+
+ICALL_EXPORT
 mono_bstr
 ves_icall_System_Runtime_InteropServices_Marshal_BufferToBSTR (const gunichar2 *ptr, int len);
 
@@ -595,10 +619,6 @@ ves_icall_System_Runtime_InteropServices_Marshal_FreeHGlobal (void *ptr);
 ICALL_EXPORT
 void
 ves_icall_System_Runtime_InteropServices_Marshal_FreeBSTR (mono_bstr_const ptr);
-
-ICALL_EXPORT
-void*
-ves_icall_System_Runtime_InteropServices_Marshal_UnsafeAddrOfPinnedArrayElement (MonoArray *arrayobj, int index);
 
 ICALL_EXPORT
 int

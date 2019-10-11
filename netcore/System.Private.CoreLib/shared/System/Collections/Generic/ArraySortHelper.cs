@@ -5,16 +5,16 @@
 /*============================================================
 **
 **
-** 
+**
 **
 **
 ** Purpose: class to sort arrays
 **
-** 
+**
 ===========================================================*/
 
 using System.Diagnostics;
-using System.Runtime.CompilerServices;
+using System.Diagnostics.CodeAnalysis;
 
 namespace System.Collections.Generic
 {
@@ -33,11 +33,12 @@ namespace System.Collections.Generic
             while (n >= 1)
             {
                 result++;
-                n = n / 2;
+                n /= 2;
             }
             return result;
         }
 
+        [DoesNotReturn]
         internal static void ThrowOrIgnoreBadComparer(object? comparer)
         {
             throw new ArgumentException(SR.Format(SR.Arg_BogusIComparer, comparer));
@@ -57,11 +58,7 @@ namespace System.Collections.Generic
             // underlying IComparables, etc) that are bogus.
             try
             {
-                if (comparer == null)
-                {
-                    comparer = Comparer<T>.Default;
-                }
-
+                comparer ??= Comparer<T>.Default;
                 IntrospectiveSort(keys, index, length, comparer.Compare);
             }
             catch (IndexOutOfRangeException)
@@ -78,11 +75,7 @@ namespace System.Collections.Generic
         {
             try
             {
-                if (comparer == null)
-                {
-                    comparer = Comparer<T>.Default;
-                }
-
+                comparer ??= Comparer<T>.Default;
                 return InternalBinarySearch(array, index, length, value, comparer);
             }
             catch (Exception e)
@@ -257,7 +250,7 @@ namespace System.Collections.Generic
             }
 
             // Put pivot in the right location.
-            Swap(keys, left, (hi - 1));
+            Swap(keys, left, hi - 1);
             return left;
         }
 
@@ -270,11 +263,11 @@ namespace System.Collections.Generic
             Debug.Assert(hi < keys.Length);
 
             int n = hi - lo + 1;
-            for (int i = n / 2; i >= 1; i = i - 1)
+            for (int i = n / 2; i >= 1; i--)
             {
                 DownHeap(keys, i, n, lo, comparer);
             }
-            for (int i = n; i > 1; i = i - 1)
+            for (int i = n; i > 1; i--)
             {
                 Swap(keys, lo, lo + i - 1);
                 DownHeap(keys, 1, i - 1, lo, comparer);
@@ -549,7 +542,7 @@ namespace System.Collections.Generic
             }
 
             // Put pivot in the right location.
-            Swap(keys, left, (hi - 1));
+            Swap(keys, left, hi - 1);
             return left;
         }
 
@@ -561,11 +554,11 @@ namespace System.Collections.Generic
             Debug.Assert(hi < keys.Length);
 
             int n = hi - lo + 1;
-            for (int i = n / 2; i >= 1; i = i - 1)
+            for (int i = n / 2; i >= 1; i--)
             {
                 DownHeap(keys, i, n, lo);
             }
-            for (int i = n; i > 1; i = i - 1)
+            for (int i = n; i > 1; i--)
             {
                 Swap(keys, lo, lo + i - 1);
                 DownHeap(keys, 1, i - 1, lo);
@@ -669,7 +662,7 @@ namespace System.Collections.Generic
 
                     TValue value = values[a];
                     values[a] = values[b];
-                    values[b] = value;                    
+                    values[b] = value;
                 }
             }
         }
@@ -684,7 +677,7 @@ namespace System.Collections.Generic
 
                 TValue v = values[i];
                 values[i] = values[j];
-                values[j] = v;                
+                values[j] = v;
             }
         }
 
@@ -786,7 +779,7 @@ namespace System.Collections.Generic
             }
 
             // Put pivot in the right location.
-            Swap(keys, values, left, (hi - 1));
+            Swap(keys, values, left, hi - 1);
             return left;
         }
 
@@ -800,11 +793,11 @@ namespace System.Collections.Generic
             Debug.Assert(hi < keys.Length);
 
             int n = hi - lo + 1;
-            for (int i = n / 2; i >= 1; i = i - 1)
+            for (int i = n / 2; i >= 1; i--)
             {
                 DownHeap(keys, values, i, n, lo, comparer);
             }
-            for (int i = n; i > 1; i = i - 1)
+            for (int i = n; i > 1; i--)
             {
                 Swap(keys, values, lo, lo + i - 1);
                 DownHeap(keys, values, 1, i - 1, lo, comparer);
@@ -911,7 +904,7 @@ namespace System.Collections.Generic
 
                     TValue value = values[a];
                     values[a] = values[b];
-                    values[b] = value;                    
+                    values[b] = value;
                 }
             }
         }
@@ -1033,7 +1026,7 @@ namespace System.Collections.Generic
             }
 
             // Put pivot in the right location.
-            Swap(keys, values, left, (hi - 1));
+            Swap(keys, values, left, hi - 1);
             return left;
         }
 
@@ -1046,11 +1039,11 @@ namespace System.Collections.Generic
             Debug.Assert(hi < keys.Length);
 
             int n = hi - lo + 1;
-            for (int i = n / 2; i >= 1; i = i - 1)
+            for (int i = n / 2; i >= 1; i--)
             {
                 DownHeap(keys, values, i, n, lo);
             }
-            for (int i = n; i > 1; i = i - 1)
+            for (int i = n; i > 1; i--)
             {
                 Swap(keys, values, lo, lo + i - 1);
                 DownHeap(keys, values, 1, i - 1, lo);
